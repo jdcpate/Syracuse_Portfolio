@@ -1,0 +1,131 @@
+---
+title: "GROUP_PROJECT"
+author: "JUSTIN_PATE"
+date: "February 9, 2019"
+output: word_document
+---
+goal for team.  The dataset is measurement data from actual airplane 3d measurements.
+The field "MAG" is the deviation from nominal.  Nominal is the perfect location where magnitued would =0 in a perfect world/perfect airplane.
+
+The goal for our team is to figure out correlation for each feature based on the field "SUB_GROUP" and which way each subgroup is trending by airplane number increase.  Are we getting better or worse?
+
+The field SHIP, is the Airplane number meaning that each airplane number should have the same naumber of features.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+warning=FALSE
+warnings=FALSE
+library(splines)
+ library(RcmdrMisc)
+ library(car)
+ library(carData)
+ library(sandwich)
+ library(effects)
+library(graphics)
+library(ggplot2)
+library(scatterplot3d)
+library(tidyr)
+library(colorspace)
+
+
+```
+
+This data set is actual data taken from critical dimmensions on a commercial business jet.
+
+```{r}
+measuredata<- data.frame(read.csv(file="C:/School_SYR/TERM2/IST_687/PROJECT/SAMPLE_WING_CENTER_MEASURE_DATA.csv", header=TRUE, sep=","))
+measuredata<-measuredata[,-1]
+measuredata[1:10,]
+subsetofmeasure<-measuredata[measuredata[,5]=="FLOOR FITTINGS",]
+summary(subsetofmeasure)
+hist(measuredata$MAG)
+
+subsetofmeasure<-measuredata[measuredata[,5]=="PRESSURE WALL BL LH",]
+summary(subsetofmeasure)
+hist(subsetofmeasure$MAG)
+#make a pie chart for measure breakdown
+#with(measuredata, pie(table(SUB_GROUP), labels=levels(SUB_GROUP), xlab="", 
+ # ylab="", main="SUB_GROUP", col=rainbow_hcl(28)))
+
+
+```
+MAKE A BOX PLOT
+TEAM:  CAN YOU FIGURE OUT HOW TO TURN THE LABELS ON THE BOTTOM BY 90?
+Also, how do I show all ships on the bottom
+
+```{r}
+library(ggplot2)
+library(scatterplot3d)
+library(tidyr)
+boxplot(MAG~as.character(SHIP), data=measuredata,id=list(method="y"),axis.text.x=element_text(angle=90,hjust=2))
+
+plotbyship<-ggplot(measuredata, aes(x=as.character(SHIP), y=MAG, group=1))+geom_line(color="red", linetype="dashed")+geom_point()+theme(text=element_text(size=8),axis.text.x=element_text(angle=90,hjust=2))
+plotbyship
+#scatterplot(MAG~SHIP | SUB_GROUP, regLine=FALSE, smooth=FALSE,boxplots=FALSE, by.groups=TRUE, data=measuredata)#HOW DO I GET RID OF THE COLOR WARNINGS?
+
+
+```
+MAKING DIFFERENT DATASETS FOR TEAM WITH sql AND SHOW BASIC SCATTER PLOTS
+
+```{r}
+library(sqldf)
+avgmagdf<-sqldf("SELECT SHIP, SUB_GROUP, avg(mag) AS AVERAGEMAG FROM measuredata GROUP BY SUB_GROUP, SHIP")
+avgmagdf[1:10,] #look at it
+```
+make a data set that shows range.  This represents how unstable the process is over time.  Process with larger ranges should be focused on more.
+```{r}
+
+
+rangeofmagdfBYSHIP<-sqldf("SELECT SHIP, SUB_GROUP, max(mag)-min(mag) AS rangeMAG FROM measuredata GROUP BY SHIP, SUB_GROUP ORDER BY max(mag)-min(mag) DESC")
+rangeofmagdfBYSHIP[1:10,] #look at it
+
+avgofranges<-sqldf("SELECT SUB_GROUP, avg(rangeMAG) AS avgofrangeMAG FROM rangeofmagdfBYSHIP GROUP BY SUB_GROUP ORDER BY avg(rangeMAG) DESC")
+avgofranges[1:15,] #look at it
+
+
+```
+
+make a data set that shows in tolerance or out of tolerance binary.  This represents how unstable the process is over time.  Process with larger ranges should be focused on more.
+```{r}
+inoroutdf<-sqldf("SELECT SHIP, SUB_GROUP, min(case when mag <=maxtol and mag>=mintol then 1 else 0 end) AS passfail FROM measuredata GROUP BY SUB_GROUP, SHIP")
+inoroutdf[1:10,] #look at it 1=pass and 0=faile
+
+```
+
+```{r}
+Boxplot(MAG~SUB_GROUP, data=measuredata, id=list(method="y") + theme(text=element_text(size=8),axis.text.x=element_text(angle=90,hjust=2)))
+```
+
+```{r}
+
+measuredata<-measuredata[,-1]
+measuredata[1:10,]
+#with(measuredata, Hist(MAG, groups=SUB_GROUP, scale="frequency", breaks="Sturges", col="darkgray"))
+```
+
+```{r}
+#rangedf<-sqldf("SELECT SUB_GROUP, range(mag) AS range FROM measuredata GROUP BY SUB_GROUP")
+#rangedf[1:10,] #look at it
+```
+
+```{r}
+mdpivotbyfeature<- data.frame(read.csv(file="C:/School_SYR/TERM2/IST_687/PROJECT/lh_max_pivot.csv", header=TRUE, sep=","))
+mdpivotbyfeature
+g<-ggplot(mdpivotbyfeature, aes(x=FLOOR.SILLS.BL.LH+PRESSURE.WALL.BL.LH+STUB.FRAMES.WL.LH, y=FLOOR.SILLS.BL.LH)) + geom_point()
+g+ stat_smooth(method="lm", col="red")
+lmodeltest=lm(formula=STUB.FRAMES.BL.LH~FLOOR.SILLS.BL.LH+PRESSURE.WALL.BL.LH+STUB.FRAMES.WL.LH, data=mdpivotbyfeature)
+summary(lmodeltest)
+
+
+```
+
+
+```{r}
+g<-ggplot(mdpivotbyfeature, aes(x=FLOOR.SILL.WL.RH, y=PRESSURE.WALL.EOP.RH)) + geom_point()
+g+ stat_smooth(method="lm", col="red")
+lmodeltest=lm(formula=PRESSURE.WALL.EOP.RH~FLOOR.SILL.WL.RH, data=mdpivotbyfeature)
+summary(lmodeltest)
+mdpivotbyfeature[1:10,]
+```
+
