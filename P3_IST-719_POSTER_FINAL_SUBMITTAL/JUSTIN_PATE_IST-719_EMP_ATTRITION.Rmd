@@ -1,0 +1,678 @@
+---
+output: 
+  word_document
+---
+
+```{r setup, include = F}
+knitr::opts_chunk$set(
+    warning = F,
+    fig.height=4, 
+    fig.width=5,
+    echo = F
+)
+
+# remove all variables
+remove(list = ls(all.names = T))
+
+# function to detach all packages
+detachAllPackages <- function() {
+  basic.packages.blank <-  c('stats', 
+                             'graphics', 
+                             'grDevices', 
+                             'utils', 
+                             'datasets', 
+                             'methods', 
+                             'base')
+  basic.packages <- paste('package:', basic.packages.blank, sep = '')
+
+  package.list <- search()[ifelse(unlist(gregexpr('package:', search())) == 1, 
+                                  T, 
+                                  F)]
+
+  package.list <- setdiff(package.list, basic.packages)
+
+  if (length(package.list) > 0)  for (package in package.list) {
+    detach(package, character.only = T)
+    print(paste('package ', package, ' detached', sep = ''))
+  }
+}
+
+#run the function
+detachAllPackages()
+
+#list of packages to load
+pkgs <- c('dplyr',
+          'tidyverse',
+          'ggplot2',
+          'reshape2',
+          'magrittr',
+          'mlr',
+          'arulesViz',
+          'factoextra')
+
+#load packages
+for (pkg in pkgs) {
+  if (!require(pkg, character.only = T, quietly = T)) {
+    install.packages(pkg)
+    library(pkg, character.only = T)
+  }
+}
+```
+
+```{r generic functions, include = F}
+ggbar <- function(df_, col) {
+  dfBar <- df_[c(col)]
+  colnames(dfBar)[colnames(dfBar) == colnames(df_)[col]] <- 'bar'
+
+  ggbp <- dfBar %>%
+    group_by(bar) %>%
+    summarise(count = n()) %>%
+    ggplot(aes(x = bar, y = count)) +
+    geom_bar(aes(fill = bar),
+             position = 'dodge',
+             stat='identity') +
+    # coord_flip() +
+    labs(x = paste(colnames(df_)[col]),
+         y = 'Number of employees',
+         title = paste('Employees by',colnames(df_)[col])) +
+    theme(legend.position = 'none',
+          plot.title = element_text(size = 10,face = 'bold'),
+          plot.subtitle  = element_text(size = 8),
+          axis.title = element_text(size = 8),
+          axis.text = element_text(size = 8))
+  return(ggbp)
+}
+```
+
+
+# Analysis
+
+## About the data
+
+###EDA
+
+```{r load data}
+df.raw <- readxl::read_excel('C:\\School_SYR\\TERM5\\IST_719\\HW3_POSTER_START\\WA_Fn-UseC_-HR-Employee-Attrition.xlsx', sheet = 'WA_Fn-UseC_-HR-Employee-Attriti')
+
+summary(df.raw)
+
+# Delete columns that are redundant
+coltodrop <- c('DailyRate',
+               'HourlyRate',
+               'MonthlyRate',
+               'Over18',
+               'EmployeeCount', # 1 for everyone
+               'EmployeeNumber',
+               'StandardHours')
+
+# Duplicating the df
+df <- df.raw
+
+# Discretize
+df$Age <- cut(df$Age, breaks = c(0, 18, 22, 30, 40, 50, 60, Inf))
+
+df$DistanceFromHome <- cut(df$DistanceFromHome, breaks = c(0, 5, 10, 15, 20, 25, 30, Inf), include.lowest = TRUE)
+
+# Annual salary breaks: 0, 35000, 50000, 70000, 100000, 150000, Inf (ROUNDED TO NEAREST HUNDRED)
+df$MonthlyIncome <- cut(df$MonthlyIncome, breaks = c(0, 2900, 4200, 5800, 8300, 12500, Inf), include.lowest = TRUE)
+
+df$PercentSalaryHike <- cut(df$PercentSalaryHike, breaks = c(0, 10, 12, 14, 16, 18, 20, Inf), include.lowest = TRUE)
+
+df$TotalWorkingYears <- cut(df$TotalWorkingYears, breaks = c(0, 2, 5, 8, 10, 15, 20, 30, 40, Inf), include.lowest = TRUE) 
+
+# Modified the code to use 6 and 8 instead of 7 as the cut
+df$YearsAtCompany <- cut(df$YearsAtCompany, breaks = c(0, 1, 2, 4, 6, 8, 10, 15, 20, 25, Inf), include.lowest = TRUE) 
+
+df$YearsInCurrentRole <- cut(df$YearsInCurrentRole, breaks = c(0, 2, 4, 6, 8, 10, 14, Inf), include.lowest = TRUE)
+
+df$YearsSinceLastPromotion <- cut(df$YearsSinceLastPromotion, breaks = c(0, 1, 2, 4, 6, 8, 10, Inf), include.lowest = TRUE)
+
+df$YearsWithCurrManager <- cut(df$YearsWithCurrManager, breaks = c(0, 1, 2, 4, 6, 8, 10, Inf), include.lowest = TRUE)
+
+# Convert to numeric factors
+df %<>% select(-coltodrop) %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate_if(is.factor, as.numeric) %>%
+  mutate_if(is.numeric, as.factor)
+
+str(df)
+```
+
+```{r EDA part 1}
+# Just charts
+str(df)
+
+for (i in 1:ncol(df)) {
+  print(ggbar(df, i))
+}
+```
+
+```{r subpopulation, include = F}
+df.2Y <- filter(df, YearsAtCompany %in% c(1, 2, 3)) # 2 years or less (factorized group 1, 2 and 3)
+df.5Y <- filter(df, YearsAtCompany %in% c(1, 2, 3, 4, 5)) # 5 years or less (factorizaed group 1 to 5)
+```
+
+```{r set up classification tasks, include = F}
+# set seed
+s <- 707
+set.seed(s, "L'Ecuyer")
+
+# Entire Pop
+task.entPop <- makeClassifTask(data = df, 
+                               target = 'Attrition', 
+                               positive = '2') # Changed positive class to 2 for Attrited
+
+# 2 years or less
+task.2Y <- makeClassifTask(data = df.2Y, 
+                           target = 'Attrition', 
+                           positive = '2') # Changed positive class to 2 for Attrited
+
+# 5 years or less
+task.5Y <- makeClassifTask(data = df.5Y, 
+                           target = 'Attrition', 
+                           positive = '2') # Changed positive class to 2 for Attrited
+```
+
+###Feature Selection
+
+```{r initial feature importance analysis, fig.width = 10}
+fv.entPop <- generateFilterValuesData(task.entPop, method = c('FSelector_chi.squared'))
+
+plotFilterValues(fv.entPop)
+
+fvdf <- fv.entPop$data %>%
+  arrange(desc(FSelector_chi.squared)) %>%
+  top_n(10)
+
+fv.2Y <- generateFilterValuesData(task.2Y, method = c('FSelector_chi.squared'))
+
+plotFilterValues(fv.2Y)
+
+fvdf.2Y <- fv.2Y$data %>%
+  arrange(desc(FSelector_chi.squared)) %>%
+  top_n(10)
+
+fv.5Y <- generateFilterValuesData(task.5Y, method = c('FSelector_chi.squared'))
+
+plotFilterValues(fv.5Y)
+
+fvdf.5Y <- fv.5Y$data %>%
+  arrange(desc(FSelector_chi.squared)) %>%
+  top_n(10)
+```
+
+###EDA - Clustering
+
+#### Elbow Plot
+
+```{r EDA part 2 - Clustering}
+df.nolab <- df %>%
+  select(-Attrition) %>%
+  mutate_if(is.factor, as.numeric)
+
+df.nolab.2Y <- df.2Y %>%
+  select(-Attrition) %>%
+  mutate_if(is.factor, as.numeric)
+
+df.nolab.5Y <- df.5Y %>%
+  select(-Attrition) %>%
+  mutate_if(is.factor, as.numeric)
+
+wss <- (nrow(df.nolab) - 1) * sum(apply(df.nolab, 2, var))
+for (i in 2:15) wss[i] <- sum(kmeans(df.nolab, centers = i)$withinss)
+
+wss.2Y <- (nrow(df.nolab.2Y) - 1) * sum(apply(df.nolab.2Y, 2, var))
+for (i in 2:15) wss.2Y[i] <- sum(kmeans(df.nolab.2Y, centers = i)$withinss)
+
+wss.5Y <- (nrow(df.nolab.5Y) - 1) * sum(apply(df.nolab.5Y, 2, var))
+for (i in 2:15) wss.5Y[i] <- sum(kmeans(df.nolab.5Y, centers = i)$withinss)
+
+ggplot(mapping = aes(x = 1:15, y = wss)) + 
+  geom_point(size = 2) + 
+  geom_line() +
+  labs(x = 'Number of clusters',
+       y = 'Within groups sum of squared',
+       title = 'Elbow plot',
+       subtitle = 'Entire population') +
+  theme(legend.position = 'none',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+ggplot(mapping = aes(x = 1:15, y = wss.2Y)) + 
+  geom_point(size = 2) + 
+  geom_line() +
+  labs(x = 'Number of clusters',
+       y = 'Within groups sum of squared',
+       title = 'Elbow plot',
+       subtitle = 'Attrition within 2 years') +
+  theme(legend.position = 'none',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+ggplot(mapping = aes(x = 1:15, y = wss.5Y)) + 
+  geom_point(size = 2) + 
+  geom_line() +
+  labs(x = 'Number of clusters',
+       y = 'Within groups sum of squared',
+       title = 'Elbow plot',
+       subtitle = 'Attrition within 5 years') +
+  theme(legend.position = 'none',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+```
+
+```{r KMeans no feature filter, include = F}
+km <- kmeans(df.nolab, centers = 4, iter.max = 500, nstart = 1, algorithm = 'Lloyd', trace = TRUE)
+
+km.2Y <- kmeans(df.nolab.2Y, centers = 4, iter.max = 500, nstart = 1, algorithm = 'Lloyd', trace = TRUE)
+
+km.5Y <- kmeans(df.nolab.5Y, centers = 4, iter.max = 500, nstart = 1, algorithm = 'Lloyd', trace = TRUE)
+```
+
+#### Clustering without feature filter
+
+```{r KMeans no feature filter - Viz}
+fviz_cluster(km, df.nolab) +
+  labs(title = 'Cluster with no feature selection',
+       subtitle = 'Entire population') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+fviz_cluster(km.2Y, df.nolab.2Y) +
+  labs(title = 'Cluster with no feature selection',
+       subtitle = 'Attrition within 2 years') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+fviz_cluster(km.5Y, df.nolab.5Y) +
+  labs(title = 'Cluster with no feature selection',
+       subtitle = 'Attrition within 5 years') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+```
+
+```{r KMeans with feature filter, include = F}
+km.filtered <- kmeans(select(df.nolab,fvdf$name), centers = 4, iter.max = 500, nstart = 1, algorithm = 'Lloyd', trace = TRUE)
+
+km.filtered.2Y <- kmeans(select(df.nolab.2Y,fvdf.2Y$name), centers = 4, iter.max = 500, nstart = 1, algorithm = 'Lloyd', trace = TRUE)
+
+km.filtered.5Y <- kmeans(select(df.nolab.5Y,fvdf.5Y$name), centers = 4, iter.max = 500, nstart = 1, algorithm = 'Lloyd', trace = TRUE)
+```
+
+#### Clustering with feature filter
+
+```{r KMeans with feature filter - Viz}
+fviz_cluster(km.filtered, select(df.nolab,fvdf$name)) +
+  labs(title = 'Cluster with feature selection',
+       subtitle = 'Entire population') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+fviz_cluster(km.filtered.2Y, select(df.nolab.2Y,fvdf.2Y$name)) +
+  labs(title = 'Cluster with feature selection',
+       subtitle = 'Attrition within 2 years') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+fviz_cluster(km.filtered.5Y, select(df.nolab.5Y,fvdf.5Y$name)) +
+  labs(title = 'Cluster with feature selection',
+       subtitle = 'Attrition within 5 years') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+```
+
+### Assocation Rules
+
+```{r Assocation Rules}
+getapriori <- function(df_, supp_, conf_) {
+  rules <- arules::apriori(df_, parameter = list(supp = supp_, conf = conf_, maxlen = 3), appearance = list(rhs = c('Attrition=2')))
+  
+  return(rules)
+}
+```
+
+#### arules - Entire Pop
+
+```{r Association Rules - Entire Pop, include = F}
+ruleset <- getapriori(df, 0.03, 0.5)
+ruleset.df <- data.frame(lhs = labels(arules::lhs(ruleset)),
+                         rhs = labels(arules::rhs(ruleset)),
+                         ruleset@quality)
+
+ruleset.df <- ruleset.df[order(-ruleset.df$lift),]
+ruleset.df[,3:5] <- round(ruleset.df[,3:5],3)
+```
+
+```{r arulesVis - Entire Pop, fig.height = 5, fig.width = 5}
+knitr::kable(ruleset.df,row.names = FALSE)
+plot(ruleset, method="graph")
+```
+
+#### arules - Attrition within 2 years
+
+```{r Association Rules - 2 Years, include = F}
+ruleset.2Y <- getapriori(df.2Y, 0.03, 0.5)
+ruleset.df.2Y <- data.frame(lhs = labels(arules::lhs(ruleset.2Y)),
+                         rhs = labels(arules::rhs(ruleset.2Y)),
+                         ruleset.2Y@quality)
+
+ruleset.df.2Y <- ruleset.df.2Y[order(-ruleset.df.2Y$lift),]
+ruleset.df.2Y[,3:5] <- round(ruleset.df.2Y[,3:5],3)
+```
+
+```{r arulesVis - 2 Years, fig.height = 5, fig.width = 5}
+knitr::kable(ruleset.df.2Y,row.names = FALSE)
+plot(ruleset.2Y, method="graph")
+```
+
+#### arules - Attrition within 5 years
+
+```{r Association Rules - 5 Years, include = F}
+ruleset.5Y <- getapriori(df.5Y, 0.03, 0.5)
+ruleset.df.5Y <- data.frame(lhs = labels(arules::lhs(ruleset.5Y)),
+                         rhs = labels(arules::rhs(ruleset.5Y)),
+                         ruleset.5Y@quality)
+
+ruleset.df.5Y <- ruleset.df.5Y[order(-ruleset.df.5Y$lift),]
+ruleset.df.5Y[,3:5] <- round(ruleset.df.5Y[,3:5],3)
+```
+
+```{r arulesVis - 5 Years, fig.height = 5, fig.width = 5}
+knitr::kable(ruleset.df.5Y,row.names = FALSE)
+plot(ruleset.5Y, method="graph")
+```
+
+
+```{r set up, include = F}
+# innerloop resample: A holdout test with 70/30 split was used for hyperparameter tuning.
+rdesc.inner = makeResampleDesc('Holdout', 
+                               stratify.cols = 'Attrition', 
+                               split = 7/10,
+                               predict = 'both')
+
+# outerloop resample: A 5CV was used to validate the model created using the inner loop and benchmark against all other models
+rdesc.outer <- makeResampleDesc("CV", 
+                                iters = 5, 
+                                stratify.cols = 'Attrition',
+                                predict = 'both')
+
+# metric used to determine accuracy is the auc of the ROC, and the mmce (misclassification rate) is used as a seconary metric.
+ms <- list(mlr::auc, mmce, acc, setAggregation(acc, train.mean))
+
+# control is a random grid search
+ctrl <- makeTuneControlRandom(maxit = 100)
+```
+
+```{r naive Bayes, include = F}
+# Naive Bayes is tuned with the value of Laplace (my experience is that it shouldn't change the model at all)
+psNaiveBayes <- makeParamSet(
+  makeIntegerParam('fw.abs', lower = 3L, upper = 10L), 
+  makeIntegerParam('laplace', lower = 0L, upper = 5L) 
+)
+
+# Create learner
+lrn.NaiveBayes <- makeLearner('classif.naiveBayes', 
+                              predict.type = 'prob')
+
+# Wrap learner with feature filter
+lrn.NaiveBayes <- makeFilterWrapper(learner = lrn.NaiveBayes, 
+                         fw.method = 'FSelector_chi.squared')
+
+# Wrap learned with tuner
+lrn.NaiveBayes <- makeTuneWrapper(lrn.NaiveBayes, 
+                                  resampling = rdesc.inner,
+                                  measures = ms, 
+                                  par.set = psNaiveBayes, 
+                                  control = ctrl, 
+                                  show.info = F)
+```
+
+```{r Decision Tree, include = F}
+# Decision tree is tuned with cp
+ps.DecisionTree <- makeParamSet(
+  makeIntegerParam('fw.abs', lower = 3L, upper = 10L), #5, 7, or 10 features
+  makeNumericParam('cp', lower = -8, upper = 0, trafo = function(x) 10^x) #10^x from -3 to 0
+)
+
+lrn.DecisionTree <- makeLearner('classif.rpart', predict.type = 'prob')
+
+lrn.DecisionTree <- makeFilterWrapper(learner = lrn.DecisionTree,
+                                     fw.method = 'FSelector_chi.squared')
+
+lrn.DecisionTree <- makeTuneWrapper(lrn.DecisionTree, 
+                                    resampling = rdesc.inner, 
+                                    measures = ms, 
+                                    par.set = ps.DecisionTree, 
+                                    control = ctrl, 
+                                    show.info = F)
+```
+
+```{r kNN, include = F}
+ps.kNN <- makeParamSet(
+  makeIntegerParam('fw.abs', lower = 3L, upper = 10L),
+  makeIntegerParam('k', lower = 2L, upper = 5L)
+)
+
+lrn.kNN <- makeLearner('classif.kknn', predict.type = 'prob')
+
+lrn.kNN <- makeFilterWrapper(learner = lrn.kNN, 
+                             fw.method = 'FSelector_chi.squared')
+                             
+lrn.kNN <- makeTuneWrapper(lrn.kNN, 
+                           resampling = rdesc.inner, 
+                           measures = ms, 
+                           par.set = ps.kNN, 
+                           control = ctrl, 
+                           show.info = F)
+```
+
+```{r Random Forest, include = F}
+ps.RandomForest <- makeParamSet(
+  makeIntegerParam('fw.abs', lower = 3L, upper = 10L),
+  makeIntegerParam("ntree", lower = 1L, upper = 500L)
+)
+
+lrn.RandomForest <- makeLearner('classif.randomForest', 
+                                predict.type = 'prob')
+
+lrn.RandomForest <- makeFilterWrapper(learner = lrn.RandomForest, 
+                                      fw.method = 'FSelector_chi.squared')
+
+lrn.RandomForest <- makeTuneWrapper(lrn.RandomForest, 
+                                    resampling = rdesc.inner, 
+                                    measures = ms, 
+                                    par.set = ps.RandomForest, 
+                                    control = ctrl, 
+                                    show.info = F)
+```
+
+```{r SVM, include = F}
+# vanilladot is just linear SVM.  
+ps.SVM <- makeParamSet(
+  makeIntegerParam('fw.abs', lower = 3L, upper = 10L),
+  makeNumericParam('C', lower = -12, upper = 12, trafo = function(x) 2^x),
+  makeDiscreteParam('kernel', values = c('vanilladot', 'polydot', 'rbfdot')),
+  makeNumericParam('sigma', lower = -12, upper = 12, trafo = function(x) 2^x,
+    requires = quote(kernel == 'rbfdot')),
+  makeIntegerParam('degree', lower = 2L, upper = 5L,
+    requires = quote(kernel == 'polydot'))
+)
+
+lrn.SVM <- makeLearner('classif.ksvm', 
+                       predict.type = 'prob')
+
+lrn.SVM <- makeFilterWrapper(learner = lrn.SVM, 
+                             fw.method = 'FSelector_chi.squared')
+
+lrn.SVM <- makeTuneWrapper(lrn.SVM, 
+                           resampling = rdesc.inner, 
+                           measures = ms, 
+                           par.set = ps.SVM, 
+                           control = ctrl, 
+                           show.info = F)
+```
+
+```{r benchmark, include = F, include = F}
+lrns <- list(lrn.NaiveBayes,
+             lrn.DecisionTree,
+             lrn.kNN,
+             lrn.RandomForest,
+             lrn.SVM)
+
+coresCount <- parallel::detectCores()
+
+# We want to parallel the resampling, not the benchmarking
+parallelMap::parallelStartSocket(cpus = coresCount, 
+                                 level = 'mlr.resample',
+                                 load.balancing = TRUE,
+                                 show.info = FALSE)
+
+bmr.entPop <- benchmark(lrns, 
+                        tasks = task.entPop, 
+                        resampling = rdesc.outer, 
+                        measure = ms, 
+                        show.info = FALSE)
+
+bmr.2Y <- benchmark(lrns,
+                    tasks = task.2Y,
+                    resampling = rdesc.outer,
+                    measure = ms,
+                    show.info = F)
+
+bmr.5Y <- benchmark(lrns,
+                    tasks = task.5Y,
+                    resampling = rdesc.outer,
+                    measure = ms,
+                    show.info = F)
+
+parallelMap::parallelStop()
+```
+
+### ROC Curve - Entire Pop
+
+```{r ROC Curve - Entire Population, fig.height = 5, fig.width = 8}
+preds.entPop = getBMRPredictions(bmr.entPop, drop = TRUE)
+
+preds.entPop = lapply(preds.entPop, function(x) {class(x) = "Prediction"; return(x)})
+
+df.preds.entPop = generateThreshVsPerfData(preds.entPop, measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df.preds.entPop) +  
+  labs(title = 'ROC curves', 
+       subtitle = 'Entire population') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+bmr.entPop$results
+```
+
+### ROC Curve - Attrition within 5 Years
+
+```{r ROC Curve - 5Y, fig.height = 5, fig.width = 8}
+preds.5Y = getBMRPredictions(bmr.5Y, drop = TRUE)
+
+preds.5Y = lapply(preds.5Y, function(x) {class(x) = "Prediction"; return(x)})
+
+df.preds.5Y = generateThreshVsPerfData(preds.5Y, measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df.preds.5Y) +  
+  labs(title = 'ROC curves', 
+       subtitle = 'Attrition at 5 years or less') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+bmr.5Y$results
+```
+
+### ROC Curve - Attrition within 2 Years
+
+```{r ROC Curve - 2Y, fig.height = 5, fig.width = 8}
+preds.2Y = getBMRPredictions(bmr.2Y, drop = TRUE)
+
+preds.2Y = lapply(preds.2Y, function(x) {class(x) = "Prediction"; return(x)})
+
+df.preds.2Y = generateThreshVsPerfData(preds.2Y, measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df.preds.2Y) +  
+  labs(title = 'ROC curves', 
+       subtitle = 'Attrition at 2 years or less') +
+  theme(legend.position = 'right',
+        plot.title = element_text(size = 10,face = 'bold'),
+        plot.subtitle  = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8))
+
+bmr.2Y$results
+```
+
+### Tuning Result
+
+#### Entire Pop
+
+```{r Tuning result - Entire Pop}
+df.res.entPop <- getBMRTuneResults(bmr.entPop, as.df = TRUE)
+
+df.res.entPop %<>%
+  arrange(-auc.test.mean)
+
+knitr::kable(df.res.entPop)
+```
+
+#### Attrition within 5 Years
+
+```{r Tuning result - 5Y}
+df.res.5Y <- getBMRTuneResults(bmr.5Y, as.df = TRUE)
+
+df.res.5Y %<>%
+  arrange(-auc.test.mean)
+
+knitr::kable(df.res.5Y)
+```
+
+#### Attrition within 2 Years
+
+```{r Tuning result - 2Y}
+df.res.2Y <- getBMRTuneResults(bmr.2Y, as.df = TRUE)
+
+df.res.2Y %<>%
+  arrange(-auc.test.mean)
+
+knitr::kable(df.res.2Y)
+```
+
+```{r, include = F, eval = F}
+xlsx::write.xlsx(df.res.entPop, file = 'tuneResult.xlsx', sheetName= 'entire population', row.names=FALSE)
+xlsx::write.xlsx(df.res.5Y, file = 'tuneResult.xlsx', sheetName= '5Y or less', row.names=FALSE, append = TRUE)
+xlsx::write.xlsx(df.res.2Y, file = 'tuneResult.xlsx', sheetName= '2y or less', row.names=FALSE, append = TRUE)
+```
+
